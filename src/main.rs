@@ -35,7 +35,7 @@ async fn change_colors(
     };
 
     // Load current theme
-    let mut theme = Theme::get_entry(&theme_config).unwrap();
+    let theme = Theme::get_entry(&theme_config).unwrap();
     println!("Current accent: {:?}", theme.accent.base.color);
 
     // Load theme builder for making changes
@@ -145,6 +145,14 @@ fn print_help() {
 }
 
 async fn daemon(colors_path: &PathBuf, config_path: &Option<PathBuf>) -> Result<(), Box<dyn std::error::Error>> {
+    // Watch the parent directory instead of the file itself. Tools like wallust
+    // replace colors.json atomically (write temp + rename), which swaps the inode
+    // and breaks a direct file watch.
+    let colors_dir = colors_path
+        .parent()
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from("."));
+
     println!("Watching for changes in: {:?}", colors_path);
 
     // Load initial colors and update theme
@@ -170,7 +178,7 @@ async fn daemon(colors_path: &PathBuf, config_path: &Option<PathBuf>) -> Result<
     }, notify::Config::default().with_poll_interval(Duration::from_secs(1)))?;
 
     // Add a path to be watched
-    watcher.watch(colors_path, RecursiveMode::NonRecursive)?;
+    watcher.watch(&colors_dir, RecursiveMode::NonRecursive)?;
 
     println!("File watcher started. Press Ctrl+C to exit.");
 
@@ -179,9 +187,28 @@ async fn daemon(colors_path: &PathBuf, config_path: &Option<PathBuf>) -> Result<
         // Use a small timeout to make the loop non-blocking
         match rx.recv_timeout(Duration::from_millis(100)) {
             Ok(event) => {
-                // Only process modify events to avoid duplicate updates
-                if matches!(event.kind, EventKind::Modify(_)) {
+                // Only react to events touching the colors file itself
+                let touches_file = event
+                    .paths
+                    .iter()
+                    .any(|p| p == colors_path);
+                if !touches_file {
+                    continue;
+                }
+                if matches!(event.kind, EventKind::Modify(_) | EventKind::Create(_)) {
                     println!("File change detected: {:?}", event);
+
+                    // Debounce: let the writer finish before reading
+                    for _ in 0..10 {
+                        match rx.recv_timeout(Duration::from_millis(100)) {
+                            Ok(_) => {}
+                            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => break,
+                            Err(e) => {
+                                eprintln!("Watch error: {:?}", e);
+                                break;
+                            }
+                        }
+                    }
 
                     // Load new colors and update theme
                     match Colors::load(colors_path) {

@@ -21,7 +21,7 @@ https://github.com/user-attachments/assets/2c85e2d7-e099-4886-8b77-6c83dd42946a
 ### Prerequisites
 
 - COSMIC Desktop Environment
-- pywal (or wallust/any tool that generates `~/.cache/wal/colors.json` or any equivalent)
+- A color generator that writes `~/.cache/wal/colors.json`. [wallust](https://codeberg.org/explosion-mental/wallust) is the recommended choice (pywal's maintained successor). Both the pywal nested format and wallust's flat format are supported. On NixOS: `nix profile install nixpkgs#wallust`
 - Rust toolchain (for building from source)
 
 ### From Source
@@ -59,7 +59,7 @@ cosmic-wal --help
 
 ## Configuration
 
-cosmic-wal uses a TOML configuration file located at `~/.config/cosmic-wal/config.toml`. If this file doesn't exist, it will be automatically created with default values on first run.
+cosmic-wal uses a TOML configuration file located at `~/.config/cosmic-wal/config.toml`. If this file doesn't exist, the default color mapping is used.
 
 ### Default Configuration
 
@@ -104,24 +104,41 @@ primary_container_color = "background"
 warning_color = null
 ```
 
-## Pywal Integration
+## Color Generation
 
-### Basic Workflow
+### wallust (recommended)
 
-1. Use pywal to generate colors from your wallpaper:
-   ```bash
-   wal -i /path/to/your/wallpaper.jpg
-   ```
+Register the bundled template so every `wallust run` also writes the pywal-compatible file cosmic-wal watches. Add this to `[templates]` in `~/.config/wallust/wallust.toml`, pointing at the provided `~/.config/wallust/templates/colors.json`:
 
-2. Run cosmic-wal to update your COSMIC theme:
-   ```bash
-   cosmic-wal --refresh
-   ```
+```toml
+[templates]
+cosmic-wal = { template = 'colors.json', target = '~/.cache/wal/colors.json' }
+```
 
-3. Or start the daemon for automatic updates:
-   ```bash
-   cosmic-wal --daemon
-   ```
+Then generate colors and refresh the theme:
+
+```bash
+wallust run -q /path/to/your/wallpaper.jpg
+cosmic-wal --refresh
+```
+
+### pywal
+
+```bash
+wal -i /path/to/your/wallpaper.jpg
+cosmic-wal --refresh
+```
+
+### Automating wallpaper changes on COSMIC + NixOS
+
+`cosmic-wal-apply` reads the current wallpaper path straight from COSMIC's background config, runs wallust on it, and refreshes the theme. Combined with the systemd units, changing your wallpaper in COSMIC updates the whole theme automatically:
+
+```bash
+# ~/.local/bin/cosmic-wal-apply (or ~/.config/systemd/user/cosmic-wal-apply)
+nix profile install nixpkgs#wallust
+cp target/release/cosmic-wal ~/.local/bin/cosmic-wal
+systemctl --user enable --now cosmic-wal.service cosmic-wal-wallpaper.path
+```
 
 ### Automatic Startup
 
